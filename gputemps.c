@@ -80,27 +80,7 @@ static void signal_handler(int signum) {
     running = 0;
 }
 
-static void restore_cursor(void) {
-    printf(CURSOR_SHOW);
-    fflush(stdout);
-}
-
-static void reset_terminal(void) {
-    tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
-}
-
-static int setup_terminal(void) {
-    struct termios new_termios;
-
-    if (tcgetattr(STDIN_FILENO, &orig_termios) < 0) return -1;
-    atexit(reset_terminal);
-    new_termios = orig_termios;
-    new_termios.c_lflag &= ~(ICANON | ECHO);
-    new_termios.c_cc[VMIN] = 0;
-    new_termios.c_cc[VTIME] = 0;
-    if (tcsetattr(STDIN_FILENO, TCSANOW, &new_termios) < 0) return -1;
-    return 0;
-}
+// Remove terminal control related functions and structures
 
 static void buffer_append(Context *ctx, const char *format, ...) {
     va_list args;
@@ -254,25 +234,17 @@ static int get_gpu_temps(Context *ctx, unsigned int index, GpuDevice *gpu) {
     return -1;
 }
 
-static int monitor_temperatures(Context *ctx) {
-    static int refresh_counter = 0;
-    int valid_readings = 0;
-
-    ctx->buffer_pos = 0;
-    refresh_counter = refresh_counter == 0 ? 1 : 0;
-    buffer_append(ctx, "\n%s", refresh_counter == 0 ? "* " : "  ");
-    buffer_append(ctx, "%s  CORE  %s  JUNC  %s  VRAM  %s\n",
-      SEPARATOR, SEPARATOR, SEPARATOR, SEPARATOR);
-
-    for (unsigned int i = 0; i < ctx->device_count; i++) {
-        GpuDevice gpu = {0};
-        if (get_gpu_temps(ctx, i, &gpu) != 0) return -1;
-        print_gpu_info(ctx, i, &gpu);
-        valid_readings++;
-    }
-
-    buffer_append(ctx, "\033[%dA", valid_readings + 2);
-    printf("%s", ctx->output_buffer);
+static int print_temperatures(Context *ctx) {
+    GpuDevice gpu = {0};
+    
+    // We'll only read the first GPU
+    if (get_gpu_temps(ctx, 0, &gpu) != 0) return -1;
+    
+    // Simple output format
+    printf("core:%u\n", gpu.gpu_temp);
+    printf("junc:%u\n", gpu.junction_temp);
+    printf("vram:%u\n", gpu.vram_temp);
+    
     return 0;
 }
 
@@ -283,48 +255,18 @@ static int init_monitoring(Context *ctx) {
         (get_device_count(ctx) < 0))
         return -1;
 
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-    signal(SIGHUP, signal_handler);
-
-    printf(CURSOR_HIDE);
-    atexit(restore_cursor);
-    return 0;
-}
-
-static int handle_input(int duration_ms) {
-    struct timeval tv = {0, duration_ms * 1000};
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(STDIN_FILENO, &fds);
-
-    if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
-        char c;
-        if (read(STDIN_FILENO, &c, 1) > 0) return 1;
-    }
-    return 0;
-}
-
-static int run_monitoring_loop(Context *ctx) {
-    while (running) {
-        if (monitor_temperatures(ctx) != 0) return -1;
-        if (handle_input(REFRESH_DURATION * 1000)) break;
-    }
-
-    printf("\033[%dB", ctx->device_count + 2);
-    printf("\n");
     return 0;
 }
 
 int main(void) {
     Context ctx = {0};
 
-    if (init_monitoring(&ctx) < 0 || setup_terminal() < 0) {
+    if (init_monitoring(&ctx) < 0) {
         cleanup_context(&ctx);
         return 1;
     }
 
-    int result = run_monitoring_loop(&ctx);
+    int result = print_temperatures(&ctx);
     cleanup_context(&ctx);
     return result == 0 ? 0 : 1;
 }
